@@ -1,139 +1,102 @@
-# AMR Intelligence Server — project proposal
+# RAG Answer Engine — Phase 4 of the RAG project (corrected proposal)
 
-Status: brainstorm, 2026-09-13. Nothing here is built yet.
+Status: proposal, 13 Sep 2026. Supersedes the earlier "AMR Intelligence Server" draft in
+this file, which was written before the RAG project's source-of-truth documents were read
+and contradicted three closed decisions (hosting, storage, and scope). That draft is
+withdrawn.
 
-## One-line pitch
+## Where this fits
 
-A server that turns the Allied Market Research (AMR) material you already own into a
-queryable, citable knowledge base, and exposes it to your report-building agents as
-MCP tools. It answers "what has AMR already said about market X, how did they cut it,
-and who did they name" in under a second instead of an hour of PDF reading.
+The RAG project (`C:\Users\Pawan\Development Work\RAG`, project memory in its `CLAUDE.md`)
+is already through Phases 0 to 2 of its charter:
 
-## Why this and not a generic scraper
+| Layer | Status (per CLAUDE.md, verified 14 Sep 2026) |
+|---|---|
+| Census, atlas, metadata, taxonomy (11 L1 + 85 L2) | done |
+| Catalog DB (6,192 reports, 7,874 vintages, 1,176 multi-vintage) | done, FK-verified |
+| Datapack cube (987 packs, 106,271 blocks, 7.58M facts, 99.11% arithmetic pass) | done |
+| EMIS skeletons (6,094 PDFs, 133,562 rows) | done |
+| EMIS PDF values | 6,092 of 6,094, rerun pending |
+| Unification, contradictions v2, back-test pairs | pending, next local action |
+| LifeMate VPS catalog load | pending, Pawan runs |
+| Cube to VPS Postgres, tree L4 to L6, **MCP answer engine** | pending, after unify |
+| AMR registry extraction | deliberately last |
 
-Three facts make this specific project worth doing:
+This repository proposes to hold the code for one pending row: the **MCP answer engine**,
+Charter section 3.3, "the house-grounded MCP server". Everything upstream of it (catalog,
+cube, skeletons, contradictions) lives in the RAG working tree and is not duplicated here.
 
-1. **You already hold the corpus.** Drive contains hundreds of AMR PDFs uploaded on
-   2026-07-21, organised as `<Industry>_Allied_Markets_<Month>_<Year>` folders
-   (batches seen: Oct 2019, Sept 2020, April 2021, Aug 2021, Jan 2025) plus
-   `Allied_Company_*` folders of company profiles and `Sample_*` report samples.
-   Every file follows one naming grammar: `<REPORT_CODE>_<Title>_<Base>-<End>.pdf`,
-   e.g. `A13137_Global Micro Server IC Market_2021-2030.pdf`. Company profiles follow
-   `<Company>-<Market>-<Industry>-<Country>.pdf`. That grammar is a free schema.
-2. **Your pipeline has slots waiting for it.** The TOC builder, market-sizing engine,
-   TAM source finder and TOC QA investigator all need a "what does a leading
-   syndicated publisher do for this market" reference. Today that is manual.
-3. **The public site is a second, live feed.** AMR report pages publish headline
-   size, CAGR, base and forecast years, segmentation and key players for free.
-   Scraped through Nimble (the site is blocked from the Claude sandbox, so the
-   scraper must run through Nimble or on your own machine), it keeps the corpus
-   current for markets you never bought.
+## Binding constraints, carried in from the SOT
 
-## What the server does
+1. **Hosting: InMotion LifeMate VPS only.** No Supabase, no Vercel. Postgres on the VPS,
+   MCP server on the VPS at `rag.lifematetech.com`. (Charter decision 3.)
+2. **No orphan numbers.** Every value returned carries code, vintage, sheet or page,
+   location, H-level, unit, currency and measure type. Enforced at the MCP boundary: a
+   number without full provenance cannot be returned. (Charter section 2.1, Atlas section 4.)
+3. **Same name is not the same thing.** A segment is never quoted by label alone. The
+   retrieval key is the full scope path, parent market included. All 35 comparable
+   segment-to-market overlaps differ by more than 10%. (Skeleton-Web finding 2.)
+4. **Latest vintage wins, as a view.** Contradictions are logged, never deleted.
+   `current_fact` is the read surface. (Charter decision 5.)
+5. **House H3 and H2 may anchor base-year magnitudes**, always tagged `anchor: house/H-level`
+   and cross-checked against an external Tier-A or B source when one exists. (Charter decision 1.)
+6. **PII is never pulled.** AMR CRM, lead, checkout and order tables are excluded.
+7. **AMR production server is read-only.** Master DB is `alliedma_alliedmarketrese`, not
+   `alliedma_Live`. Registry extraction stays last.
+8. No credentials in this repo or in chat, ever.
 
-### Ingest (two feeds, one schema)
+## Tool surface (Charter section 3.3, unchanged)
 
-| Feed | Source | Method | Cadence |
-|------|--------|--------|---------|
-| Corpus | Google Drive AMR folders | Drive API list, PDF text + layout extraction, schema-guided parse | Once, then on new uploads |
-| Catalog | alliedmarketresearch.com report and press-release pages | Nimble Extract with a generated template, polite rate limit, public pages only | Weekly diff |
+| Tool | Returns |
+|---|---|
+| `rag_find_market(query)` | candidate report codes, vintages, H-level |
+| `rag_get_sizing(code, dim, region)` | the cube slice with full provenance |
+| `rag_get_taxonomy(market)` | the house segmentation lens, as scope paths |
+| `rag_get_lineage(market)` | every vintage of this market |
+| `rag_backtest(market or domain)` | realized forecast error and bands |
+| `rag_house_view(market, year)` | the house number, its H-level, its confidence |
+| `rag_vendors(market)` | companies profiled against this market |
 
-Both feeds land in one Supabase schema:
+## Data it reads
 
-- `reports` — report_code, title, industry, sub_industry, base_year, forecast_end,
-  publish_month, pages, authors, source (corpus or catalog), drive_file_id, url
-- `market_headlines` — report_code, base_value_usd, base_year, forecast_value_usd,
-  forecast_year, cagr, currency, unit, verbatim_quote, page_ref
-- `segmentation` — report_code, dimension (type, application, end user, region),
-  parent_segment, segment, level
-- `key_players` — report_code, company, country, profile_file_id
-- `toc_entries` — report_code, chapter, section, title, page, is_table, is_figure
-  (gives LOT and LOF counts for free)
-- `chunks` — report_code, page, text, embedding (pgvector) for semantic search
+The VPS Postgres built from `_DB/schema_postgres.sql` (15 tables plus the `current_fact`
+view): `report`, `vintage`, `file`, `taxonomy_node`, `market`, `market_alias`,
+`report_market`, `company`, `company_alias`, `vendor_edge`, `meta_row`, `collision`,
+`legacy_code_map`, `cube_fact`, `block_check`. The 13 catalog CSV exports in
+`_DB/export/` load the spine; `_ATLAS/cube/facts_*.csv` fill `cube_fact`.
 
-Every numeric row keeps a verbatim quote and a page reference, so the TAM pipeline's
-evidence agent can re-verify it on the saved page.
-
-### Serve (MCP tools, plus the same over REST)
-
-| Tool | What it answers |
-|------|-----------------|
-| `search_reports(query, industry?, year_range?)` | Which AMR reports cover this market or adjacent ones |
-| `get_report(report_code)` | Metadata, headline, segmentation tree, players, TOC |
-| `get_market_headline(market)` | Size, CAGR, years, with quote and page for citation |
-| `get_segmentation(report_code)` | The full segment tree as JSON |
-| `compare_toc(my_toc, report_code)` | Diff a draft TOC against AMR's for the same market; flags missing dimensions, LOT/LOF gaps |
-| `find_company_profiles(company or market)` | Which profile PDFs exist and what they cover |
-| `corpus_stats()` | Coverage by industry, batch and year, so you know the blind spots |
-| `semantic_search(question)` | Passage-level answers across all reports with citations |
-
-### Consumers already in your system
-
-- **sme-toc-builder**: call `compare_toc` at the validator stage as a benchmark
-  against a syndicated peer.
-- **market-sizing-engine / TAM calculator**: call `get_market_headline` as the
-  top-down cross-check. AMR is a syndicated estimate, so it enters as a Tier-C
-  sanity check, never as a sourced leaf.
-- **source-finder**: seed the discovery pool with AMR's named players and
-  segment names for the market.
-- **toc-qa-investigator**: use `corpus_stats` and `compare_toc` to score uploaded
-  TOCs against the closest AMR report in the same industry.
-- **Ahrefs (stretch)**: pull AMR's top organic report pages and rank which markets
-  draw traffic but are missing from your own catalog. A "what to publish next"
-  gap finder.
-
-## Architecture
+## Proposed layout of this repository
 
 ```
-Drive folders ──┐                          ┌── MCP server (stdio + Streamable HTTP)
-                ├─► ingest workers ─► Supabase ─┤
-AMR site (Nimble)┘   (Python)         (pgvector) └── REST API (FastAPI) ─► your agents
+server/        MCP server (Python, official MCP SDK; stdio for Claude Code, Streamable HTTP on the VPS)
+server/db/     read-only query layer over the VPS Postgres, provenance enforced here
+server/tests/  fixture Postgres loaded from _DB/export CSVs and a cube sample; every tool
+               tested for "no orphan number" and "scope path, not label"
+deploy/        systemd unit and reverse-proxy notes for rag.lifematetech.com (no secrets)
+docs/          this proposal, decisions, and the tool contract
 ```
 
-- Language: Python 3.12. Reasons: best PDF tooling (pymupdf, pdfplumber), the
-  official MCP SDK, and your existing skills already run Python scripts.
-- Storage: Supabase Postgres with pgvector. You already have the connector, and
-  the TOC QA investigator already writes there.
-- Hosting: the MCP server runs locally over stdio for Claude Code and Cowork, and
-  on Vercel or a small VPS over Streamable HTTP for the routines.
-- Secrets: Drive service account, Supabase service key, Nimble key. All via env,
-  never in the repo.
+## Sequencing
 
-## Scope guardrails
+1. Pawan runs the two pending local scripts and the VPS catalog load (CLAUDE.md "Immediate
+   next actions"). Nothing in this repo can be exercised against real data before that.
+2. Build the query layer and the seven tools against the published schema, tested on a
+   local Postgres loaded from the export CSVs.
+3. Deploy to the VPS behind HTTPS on 443. Verify each tool from Claude Code on the
+   Windows machine.
+4. Wire the TAM pipeline agents (source-finder, evidence, reconciliation, forecast,
+   narrative) and sme-toc-builder to the server. Charter Phase 5.
 
-- Public site pages only, polite rate limits, no login walls, no bypassing
-  paywalls. Purchased PDFs stay private in your Drive and your Supabase project.
-- The server cites; it does not invent. Every number carries a quote and a page.
-- AMR figures are one publisher's estimate. Downstream agents treat them as
-  cross-checks, never as primary evidence.
+## Environment note
 
-## Phased plan
+From this Claude cloud sandbox, both `rag.lifematetech.com` and `alliedmarketresearch.com`
+are blocked by the egress proxy (HTTP 403 on CONNECT). CLAUDE.md states 443 is reachable
+from the cloud sandbox; that was not true in this session. Code can be written and tested
+here against a local Postgres, but deployment and live checks must run from the Windows
+machine or on the VPS itself.
 
-1. **Corpus inventory (1 day).** Walk the Drive folders, parse filenames into
-   `reports`, produce `corpus_stats`. Zero PDF parsing yet. Immediately useful.
-2. **Report parsing (3 to 4 days).** Extract TOC, headline, segmentation and
-   players from full reports. Validate on 20 reports by hand.
-3. **MCP server v1 (2 days).** `search_reports`, `get_report`,
-   `get_market_headline`, `corpus_stats`. Wire into Claude Code and Cowork.
-4. **Catalog scraper (2 days).** Nimble extraction template for report pages,
-   weekly diff routine, merge into the same tables.
-5. **Semantic search and compare_toc (3 days).** Chunk, embed, and ship the
-   TOC diff that the TOC builder and QA investigator consume.
-6. **Gap finder with Ahrefs (stretch).**
+## Decision needed
 
-## Repository decision
-
-No new GitHub repository is required. `snehpawan/web-scraper` exists, is empty, and
-is already attached to this session, so the whole project fits there as a single
-repo with `ingest/`, `server/` and `docs/`. Split a second repo out only if the MCP
-server later needs a separate release cadence from the ingest workers.
-
-## Open questions for you
-
-1. Confirm the Drive root folders to index (the `Allied_Markets_*` and
-   `Allied_Company_*` parents) and whether Sample reports should be indexed as a
-   separate source type.
-2. Is a Supabase project already provisioned for AccelBR that this should share,
-   or should it get its own?
-3. Should the catalog scraper cover only markets present in the corpus, or the
-   whole AMR catalog?
+Confirm that `snehpawan/web-scraper` is the intended home for the answer engine code. If
+the RAG working tree is meant to stay the single home, this repository should be left
+empty or archived instead.

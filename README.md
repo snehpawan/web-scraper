@@ -1,22 +1,12 @@
-# AMR Intelligence Server
+# RAG Answer Engine
 
-Turns an owned Allied Market Research report library plus AMR's public catalog into a
-queryable, citable knowledge base, served to report-building agents as MCP tools and a
-REST API.
+Proposed home for the MCP answer engine of the RAG project (Research Agent Grounding):
+the house-grounded retrieval server that exposes the Allied Market Research catalog and
+numeric cube on the LifeMate VPS to the TAM pipeline and report-building skills.
 
-Status: proposal stage. See [docs/PROPOSAL.md](docs/PROPOSAL.md) for the brainstorm,
-schema, tool surface, architecture and phased plan.
+Status: proposal only, awaiting confirmation that this repository is the intended home.
+See [docs/PROPOSAL.md](docs/PROPOSAL.md).
 
-## Planned layout
-
-```
-ingest/    Drive corpus walker, PDF parsers, Nimble catalog scraper
-server/    MCP server (stdio + Streamable HTTP) and FastAPI REST surface
-docs/      Proposal, schema notes, decisions
-```
-
-## Principles
-
-- Every number served carries a verbatim quote and a page reference.
-- Public site pages only, polite rate limits, purchased PDFs stay private.
-- AMR figures are one publisher's estimate and are served as cross-checks.
+Binding rules inherited from the RAG charter: VPS-only hosting, no orphan numbers, scope
+path never bare label, latest vintage wins as a view, PII never pulled, no secrets in
+the repo.
